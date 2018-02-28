@@ -1,0 +1,182 @@
+---
+title: "Sms Verification - Spam/Ham"
+author: "Aravind"
+date: "January 24, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading Libraries
+```{r, warning=FALSE}
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(tm)
+library(e1071)
+require(tidyr)
+library(NLP)
+```
+## Reading data
+```{r}
+spam_data<-read.csv("smsspam.csv",stringsAsFactors = F)
+head(spam_data)
+```
+
+
+remove the columns 3 to 5, which is not having any data, so can remove it
+```{r}
+colnames(spam_data)<-c("label","text")
+str(spam_data)
+spam_data<-spam_data[ , 1:2]
+str(spam_data)
+```
+
+## Analysis
+### Distribution of SMS - Ham / Spam Count
+
+```{r}
+spam_data$label<-as.factor(spam_data$label)
+prop.table(table(spam_data$label))
+ggplot(spam_data,aes(x=label,fill=label))+geom_bar(stat="count")+scale_fill_manual(values=c("#ff7f50","#003767"))+labs("Distribution of SMS")
+```
+
+### Distribution of SMS -Length
+```{r}
+spam_data$length<-nchar(spam_data$text)
+summary(spam_data$length)
+ggplot(spam_data,aes(x=length,fill=label))+geom_histogram(binwidth=5)+scale_fill_manual(values=c("#ff7f50","#003767"))+labs("Distribution of SMS length")
+```
+
+
+
+
+## Tokenization
+   In this section, with the function vectorSource and Corpus, split the SMS into words.Each SMS will be considered as a Document,each word in the document as **Token** and each document as vector of features. Dataset has about 5572 SMS, so after tokenization will get 5572 documents
+```{r}
+
+corpus <- VCorpus(VectorSource(spam_data$text))
+corpus
+inspect(corpus[1:3])
+
+```
+
+
+## Document Preprocessing
+    SMS has been converted to tokens , but it may have special characters,sysmbols,punctuation, whitespace etc. Here will remove all those unwanted words with tm_map function
+```{r}
+Sys.setlocale("LC_ALL", "C")
+clean_corpus<-tm_map(corpus,removeWords,stopwords(kind="english"))
+clean_corpus<-tm_map(corpus,stripWhitespace)
+clean_corpus<-tm_map(corpus,content_transformer(tolower))
+clean_corpus<-tm_map(corpus,removePunctuation)
+clean_corpus<-tm_map(corpus,removeNumbers)
+clean_corpus<-tm_map(corpus,stemDocument)
+
+
+```
+
+## Document Term Matrix
+Now convert the corpus into Document Term matrix.
+```{r}
+DocumentTermMatrix(clean_corpus)
+```
+
+
+```{r}
+
+spam_dtm<-DocumentTermMatrix(clean_corpus)
+spam_dtm
+```
+### Finding Frequent Terms
+```{r}
+freq5<-findFreqTerms(spam_dtm,5)
+length(freq5)
+freq5[1:10]
+```
+
+## Training/Testing dataset Splitting
+
+```{r}
+spam_dtm_train<-spam_dtm[1:4150,]
+spam_dtm_test<-spam_dtm[4151:5572,]
+
+corpus_train<-clean_corpus[1:4150]
+corpus_test<-clean_corpus[4151:5572]
+
+spam_df_train_label<-spam_data[1:4150,]$label
+spam_df_test_label<-spam_data[4151:5572,]$label
+prop.table(table(spam_df_train_label))
+prop.table(table(spam_df_test_label))
+```
+
+
+```{r}
+dtm_train<- spam_dtm_train[, freq5]
+
+dim(dtm_train)
+dtm_test<- spam_dtm_test[,freq5]
+
+dim(dtm_test)
+#train1<-as.data.frame(inspect(dtm_train))
+#test1<-as.data.frame(inspect(dtm_test))
+```
+
+
+```{r}
+convert_count <- function(x) {
+  y <- ifelse(x > 0, "yes","no")
+    y
+}
+
+train<- apply(dtm_train, 2, convert_count)
+
+test <- apply(dtm_test, 2, convert_count)
+test[1:10,450:456]
+#train1<-as.data.frame(inspect(train))
+#test1<-as.data.frame(test)
+```
+## Training the model with Naive Bayes
+```{r}
+#library(rpart)
+set.seed(12345)
+system.time( classifier <- naiveBayes(train,spam_df_train_label) )
+#model1<-rpart(spam_df_train$label~ train)
+```
+
+## Prediction
+```{r}
+ pred <- predict(classifier, test) 
+```
+
+## Confusion Matrix
+```{r}
+conf<- confusionMatrix(pred, spam_df_test_label)
+conf
+
+confusion_matrix <- as.data.frame(table(pred, spam_df_test_label))
+
+ggplot(data = confusion_matrix,      aes(x = pred, y = spam_df_test_label)) +
+  geom_tile(aes(fill = Freq)) +
+  geom_text(aes(label = sprintf("%1.0f", Freq)), vjust = 1) +
+  scale_fill_gradient(low = "#ff7f50",
+                      high = "#003767",
+                      trans = "log")
+```
+
+## ROC Curve  
+```{r, warning= FALSE}
+#classifier1<-naiveBayes(train,spam_df_train_label,method="class")
+probs<-predict(classifier,test,type="raw")
+
+library(ROCR)
+
+pred <- prediction(probs[, "spam"], spam_df_test_label)
+perf_nb <- performance(pred, measure='tpr', x.measure='fpr')
+plot(perf_nb)
+```
+
+## Conclusion
+    Naive Bayes had classified the SMS with 98 % of accuracy..
